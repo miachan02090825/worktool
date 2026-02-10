@@ -136,23 +136,29 @@
 
                 // Generic Fetcher with Retry
                 const fetchWithRetry = async (apiPath) => {
-                    const targetUrl = `${cleanUrl}${apiPath}`;
+                    let targetUrl = `${cleanUrl}${apiPath}`;
+                    
+                    // Critical Fix: For proxies, we MUST include the key in the target URL itself before encoding
+                    // because most proxies won't forward custom headers or query params appended outside.
+                    if (proxyMode !== 'direct') {
+                        const separator = targetUrl.includes('?') ? '&' : '?';
+                        targetUrl = `${targetUrl}${separator}key=${config.apiKey}`;
+                    }
+
                     let lastErr = null;
 
                     for (const provider of proxyProviders) {
                         try {
                             setStatusMsg(`嘗試連線中 (${provider.name})...`);
-                            const fetchUrl = provider.fn(targetUrl);
+                            
+                            // Generate the proxy URL with the already-authenticated target URL
+                            const finalUrl = provider.fn(targetUrl);
                             
                             // Add headers only for Direct mode to avoid CORS preflight issues on some proxies
+                            // For proxies, the key is already in the targetUrl above
                             const options = proxyMode === 'direct' 
                                 ? { headers: { 'X-Redmine-API-Key': config.apiKey } } 
                                 : {};
-
-                            // If not direct, append key to query params for safety as some proxies strip headers
-                            const finalUrl = proxyMode === 'direct' 
-                                ? fetchUrl 
-                                : (fetchUrl.includes('?') ? `${fetchUrl}&key=${config.apiKey}` : `${fetchUrl}?key=${config.apiKey}`);
 
                             const res = await fetch(finalUrl, options);
                             
