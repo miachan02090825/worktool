@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Redmine 專案戰情室</title>
+    <title>Redmine 個人戰情室 (正式版)</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- React & ReactDOM -->
@@ -86,9 +86,7 @@
             Search: <><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></>,
             List: <><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></>,
             Users: <><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></>,
-            Play: <polygon points="5 3 19 12 5 21 5 3"></polygon>,
-            CheckCircle: <><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></>,
-            WifiOff: <><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/><path d="M10.71 5.05A16 16 0 0 1 22.58 9"/><path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></>
+            CheckCircle: <><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></>
         };
 
         const Main = () => {
@@ -100,16 +98,14 @@
                 apiKey: safeGet('redmine_apiKey', ''),
                 projectId: safeGet('redmine_projectId', '')
             });
-            // Changed default to 'auto' to handle multiple proxies
-            const [proxyMode, setProxyMode] = useState(safeGet('redmine_proxyMode', 'auto'));
+            const [proxyMode, setProxyMode] = useState(safeGet('redmine_proxyMode', 'public'));
             const [showSettings, setShowSettings] = useState(false);
             const [issues, setIssues] = useState([]);
             const [currentUser, setCurrentUser] = useState(null);
             const [loading, setLoading] = useState(false);
             const [error, setError] = useState(null);
-            const [statusMsg, setStatusMsg] = useState('');
             
-            // UI Filters
+            // UI Filters: 'all' (open), 'today', 'overdue', 'closed'
             const [filterType, setFilterType] = useState('all'); 
 
             // --- Effects ---
@@ -120,129 +116,87 @@
                 localStorage.setItem('redmine_proxyMode', proxyMode);
             }, [config, proxyMode]);
 
-            // --- Demo Data ---
-            const loadDemoData = () => {
-                setLoading(true);
-                setError(null);
-                setStatusMsg('正在建立模擬資料...');
-                setConfig(prev => ({ ...prev, apiKey: 'demo' })); 
-                
-                setTimeout(() => {
-                    const today = new Date().toISOString().split('T')[0];
-                    const past = new Date(Date.now() - 86400000 * 3).toISOString().split('T')[0];
-                    setIssues([
-                        { id: 101, subject: '伺服器異常排查', project: { name: 'Infra' }, status: { name: 'New' }, assigned_to: { id: 1, name: 'Admin User' }, due_date: today },
-                        { id: 102, subject: '前端介面 RWD 優化', project: { name: 'Web App' }, status: { name: 'In Progress' }, assigned_to: { id: 2, name: 'John Doe' }, due_date: past },
-                        { id: 103, subject: '金流 API 串接測試', project: { name: 'Web App' }, status: { name: 'Feedback' }, assigned_to: { id: 1, name: 'Admin User' }, due_date: null },
-                        { id: 104, subject: '每週自動備份腳本', project: { name: 'Backend' }, status: { name: 'New' }, assigned_to: { id: 3, name: 'Jane Smith' }, due_date: today },
-                        { id: 105, subject: '2024 年度報表匯出功能', project: { name: 'Web App' }, status: { name: 'New' }, assigned_to: { id: 2, name: 'John Doe' }, due_date: past },
-                        { id: 106, subject: '防火牆規則更新 (已完成)', project: { name: 'Infra' }, status: { name: 'Closed' }, assigned_to: { id: 1, name: 'Admin User' }, due_date: past },
-                        { id: 107, subject: '使用者登入逾時問題', project: { name: 'Web App' }, status: { name: 'In Progress' }, assigned_to: { id: 3, name: 'Jane Smith' }, due_date: today },
-                        { id: 108, subject: 'iOS App 上架審核', project: { name: 'Mobile' }, status: { name: 'In Progress' }, assigned_to: { id: 1, name: 'Admin User' }, due_date: today },
-                        { id: 109, subject: '資料庫遷移 (歷史)', project: { name: 'Backend' }, status: { name: 'Closed' }, assigned_to: { id: 3, name: 'Jane Smith' }, due_date: past },
-                    ]);
-                    setCurrentUser({ id: 1, firstname: 'Admin', lastname: 'User' });
-                    setLoading(false);
-                    setStatusMsg('');
-                }, 600);
-            };
-
-            // --- Fetch Logic (Enhanced Proxy) ---
+            // --- Fetch Logic ---
             const fetchData = async () => {
-                if (config.apiKey.toLowerCase() === 'demo') {
-                    loadDemoData();
-                    return;
-                }
-
                 if (!config.apiKey) { setError('請先輸入 API Token'); return; }
-                
-                // HTTPS Mixed Content Check
-                if (window.location.protocol === 'https:' && config.url.startsWith('http:')) {
-                    setError('安全性錯誤：您的網站位於 HTTPS (如 GitHub Pages)，但 Redmine 是 HTTP。瀏覽器禁止此類「混合內容」連線。解決方法：請為 Redmine 啟用 HTTPS，或使用 Demo 模式測試。');
-                    return;
-                }
-
-                setLoading(true); 
-                setError(null);
-                setStatusMsg('準備連線...');
-
-                // Proxy Providers List
-                // We use 'key' param in URL for proxies to avoid Header stripping issues
-                const proxyProviders = [
-                    { name: 'CorsProxy.io', fn: (target) => `https://corsproxy.io/?${encodeURIComponent(target)}` },
-                    { name: 'AllOrigins', fn: (target) => `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}` },
-                    { name: 'CodeTabs', fn: (target) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(target)}` }
-                ];
-
-                const fetchWithRetry = async (path) => {
-                    const targetUrl = `${config.url}${path}${path.includes('?')?'&':'?'}key=${config.apiKey}&limit=100&status_id=*`;
-                    
-                    if (proxyMode === 'direct') {
-                        setStatusMsg('嘗試直連...');
-                        const res = await fetch(targetUrl, { headers: {'X-Redmine-API-Key': config.apiKey}});
-                        if (!res.ok) throw new Error(`直連失敗 (${res.status})`);
-                        return await res.json();
-                    }
-
-                    // Auto Proxy Mode: Loop through providers
-                    let lastErr = null;
-                    for (const provider of proxyProviders) {
-                        try {
-                            setStatusMsg(`嘗試連線中 (${provider.name})...`);
-                            const proxyUrl = provider.fn(targetUrl);
-                            const res = await fetch(proxyUrl);
-                            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                            return await res.json();
-                        } catch (e) {
-                            console.warn(`${provider.name} failed:`, e);
-                            lastErr = e;
-                        }
-                    }
-                    throw new Error('所有連線方式皆失敗。請確認 Redmine 網址正確，或檢查是否被防火牆阻擋。');
-                };
+                setLoading(true); setError(null);
 
                 try {
+                    // Quick Proxy Implementation
+                    const fetchAPI = async (path) => {
+                        // status_id=* to get ALL issues including closed ones
+                        // Note: limit=100. For strict personal dashboards, using &assigned_to_id=me in API is better,
+                        // but keeping filter logic client-side allows seeing team context if needed later.
+                        const target = `${config.url}${path}${path.includes('?')?'&':'?'}key=${config.apiKey}&limit=100&status_id=*`;
+                        const url = proxyMode === 'direct' ? target : 
+                                   `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`;
+                        const res = await fetch(url, proxyMode === 'direct' ? { headers: {'X-Redmine-API-Key': config.apiKey}} : {});
+                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                        return await res.json();
+                    };
+
                     const [userRes, issuesRes] = await Promise.all([
-                        fetchWithRetry('/users/current.json'),
-                        fetchWithRetry('/issues.json')
+                        fetchAPI('/users/current.json'),
+                        fetchAPI('/issues.json')
                     ]);
                     
                     setCurrentUser(userRes.user);
                     setIssues(issuesRes.issues);
-                    setStatusMsg('');
                 } catch (err) {
-                    console.error(err);
-                    let niceError = err.message;
-                    if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
-                        niceError = '網路連線失敗 (CORS Blocked)。如果您部署在 GitHub Pages，這通常是因為瀏覽器安全性限制，阻止了對第三方伺服器的請求。建議使用「公共 Proxy」模式嘗試。';
-                    }
-                    setError(niceError);
+                    setError(err.message === 'HTTP 401' ? 'API Token 無效' : '連線失敗，請檢查網址或嘗試不同連線模式');
                 } finally {
                     setLoading(false);
                 }
             };
 
-            // --- Filtering Logic ---
+            // --- Filtering Logic (Strictly Personal) ---
             const filteredIssues = useMemo(() => {
-                let res = issues;
-                
-                if (filterType === 'closed') {
-                    return res.filter(i => isClosed(i.status?.name));
+                // First, strictly filter to ONLY issues assigned to the current user
+                let myIssues = issues;
+                if (currentUser) {
+                    myIssues = issues.filter(i => i.assigned_to?.id === currentUser.id);
+                } else if (issues.length > 0) {
+                    // If we have issues but no user matched yet (edge case), return empty to be safe
+                    // or return empty until loaded
+                    return [];
                 }
 
-                res = res.filter(i => !isClosed(i.status?.name));
+                // Case 1: Viewing "Closed" tab
+                if (filterType === 'closed') {
+                    return myIssues.filter(i => isClosed(i.status?.name));
+                }
+
+                // Case 2: Viewing active tabs (All Pending, Today, Overdue)
+                // Exclude closed issues
+                let activeIssues = myIssues.filter(i => !isClosed(i.status?.name));
 
                 if (filterType === 'today') {
-                    res = res.filter(i => isToday(i.due_date));
+                    return activeIssues.filter(i => isToday(i.due_date));
                 }
                 if (filterType === 'overdue') {
-                    res = res.filter(i => isPast(i.due_date));
+                    return activeIssues.filter(i => isPast(i.due_date));
                 }
-                if (filterType === 'my' && currentUser) {
-                    res = res.filter(i => i.assigned_to?.id === currentUser.id);
-                }
-                return res;
+                
+                // 'all' means 'all active assigned to me'
+                return activeIssues;
             }, [issues, filterType, currentUser]);
+
+            // --- Helper for Counts (Strictly Personal) ---
+            const getCounts = () => {
+                if (!currentUser) return { all: 0, today: 0, overdue: 0, closed: 0 };
+                
+                const myIssues = issues.filter(i => i.assigned_to?.id === currentUser.id);
+                const active = myIssues.filter(i => !isClosed(i.status?.name));
+                
+                return {
+                    all: active.length,
+                    today: active.filter(i => isToday(i.due_date)).length,
+                    overdue: active.filter(i => isPast(i.due_date)).length,
+                    closed: myIssues.filter(i => isClosed(i.status?.name)).length
+                };
+            };
+            
+            const counts = getCounts();
 
             // --- UI Components ---
             const StatCard = ({ label, val, color, icon, active, onClick }) => (
@@ -271,14 +225,14 @@
                                     </div>
                                     <div>
                                         <h1 className="text-lg font-bold text-slate-800">專案戰情室</h1>
-                                        {currentUser && <p className="text-xs text-slate-500">Hi, {currentUser.firstname}</p>}
+                                        {currentUser && <p className="text-xs text-slate-500">Hi, {currentUser.firstname} (個人檢視)</p>}
                                     </div>
                                 </div>
 
                                 <div className="flex items-center gap-2">
                                     <input 
                                         type="password" 
-                                        placeholder="輸入 Token 或 demo" 
+                                        placeholder="輸入 Token" 
                                         className="bg-slate-50 border border-slate-200 rounded px-3 py-1.5 text-sm w-32 focus:w-48 transition-all outline-none focus:ring-2 focus:ring-blue-500"
                                         value={config.apiKey}
                                         onChange={e => setConfig({...config, apiKey: e.target.value})}
@@ -287,18 +241,9 @@
                                     <button 
                                         onClick={fetchData} 
                                         disabled={loading}
-                                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded text-sm font-bold flex items-center gap-2 min-w-[80px] justify-center"
+                                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded text-sm font-bold flex items-center gap-2"
                                     >
-                                        {loading ? <span className="animate-spin">⌛</span> : <><Icon d={Icons.Search} className="w-4 h-4" /> 分析</>}
-                                    </button>
-
-                                    <button 
-                                        onClick={loadDemoData}
-                                        className="bg-emerald-100 text-emerald-700 hover:bg-emerald-200 px-3 py-1.5 rounded text-sm font-bold flex items-center gap-1 transition-colors"
-                                        title="使用範例資料預覽"
-                                    >
-                                        <Icon d={Icons.Play} className="w-3 h-3 fill-current" />
-                                        試用 Demo
+                                        {loading ? '讀取中...' : <><Icon d={Icons.Search} className="w-4 h-4" /> 分析</>}
                                     </button>
 
                                     <button 
@@ -314,12 +259,11 @@
                             {showSettings && (
                                 <div className="mt-3 pt-3 border-t border-slate-100 flex gap-4 animate-fadeIn">
                                     <div className="flex-1">
-                                        <label className="text-xs text-slate-500 block mb-1">Redmine 網址 (包含 https://)</label>
+                                        <label className="text-xs text-slate-500 block mb-1">Redmine 網址</label>
                                         <input 
-                                            className="w-full bg-slate-50 border border-slate-200 rounded px-2 py-1 text-sm text-slate-600 focus:ring-2 focus:ring-blue-500 outline-none"
+                                            className="w-full bg-slate-50 border border-slate-200 rounded px-2 py-1 text-sm text-slate-600"
                                             value={config.url}
                                             onChange={e => setConfig({...config, url: e.target.value})}
-                                            placeholder="https://redmine.example.com"
                                         />
                                     </div>
                                     <div className="w-48">
@@ -329,8 +273,8 @@
                                             value={proxyMode}
                                             onChange={e => setProxyMode(e.target.value)}
                                         >
-                                            <option value="auto">自動選擇 Proxy (推薦)</option>
-                                            <option value="direct">直連 (僅限內網/本地)</option>
+                                            <option value="public">公共 Proxy (推薦)</option>
+                                            <option value="direct">直連 (需 CORS 套件)</option>
                                         </select>
                                     </div>
                                 </div>
@@ -339,30 +283,20 @@
                     </header>
 
                     <main className="max-w-7xl mx-auto px-4 py-6 space-y-8">
-                        {statusMsg && !error && (
-                            <div className="flex justify-center animate-pulse text-blue-600 font-bold text-sm">
-                                {statusMsg}
-                            </div>
-                        )}
-
                         {error && (
-                            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-4 rounded-lg flex items-start gap-3 animate-fadeIn shadow-sm">
-                                <Icon d={Icons.WifiOff} className="w-6 h-6 mt-0.5 shrink-0" /> 
-                                <div>
-                                    <div className="font-bold mb-1">連線發生錯誤</div>
-                                    <div className="text-sm opacity-90">{error}</div>
-                                </div>
+                            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-center gap-2">
+                                <Icon d={Icons.Alert} className="w-5 h-5" /> {error}
                             </div>
                         )}
 
                         {/* Main Content */}
                         {issues.length > 0 ? (
                             <section className="animate-fadeIn">
-                                {/* Stats - Modified to 5 cols for LG screens */}
-                                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
+                                {/* Stats - 4 Columns for Personal View */}
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
                                     <StatCard 
-                                        label="所有待辦" 
-                                        val={issues.filter(i => !isClosed(i.status?.name)).length} 
+                                        label="我的待辦" 
+                                        val={counts.all} 
                                         color="text-slate-800" 
                                         icon={Icons.List} 
                                         active={filterType === 'all'}
@@ -370,7 +304,7 @@
                                     />
                                     <StatCard 
                                         label="今日待辦" 
-                                        val={issues.filter(i => isToday(i.due_date) && !isClosed(i.status?.name)).length} 
+                                        val={counts.today} 
                                         color="text-blue-600" 
                                         icon={Icons.Clock} 
                                         active={filterType === 'today'}
@@ -378,23 +312,15 @@
                                     />
                                     <StatCard 
                                         label="逾期案件" 
-                                        val={issues.filter(i => isPast(i.due_date) && !isClosed(i.status?.name)).length} 
+                                        val={counts.overdue} 
                                         color="text-red-600" 
                                         icon={Icons.Alert} 
                                         active={filterType === 'overdue'}
                                         onClick={() => setFilterType('overdue')}
                                     />
                                     <StatCard 
-                                        label="我的待辦" 
-                                        val={currentUser ? issues.filter(i => i.assigned_to?.id === currentUser.id && !isClosed(i.status?.name)).length : 0} 
-                                        color="text-emerald-600" 
-                                        icon={Icons.Users} 
-                                        active={filterType === 'my'}
-                                        onClick={() => setFilterType('my')}
-                                    />
-                                    <StatCard 
                                         label="已結案" 
-                                        val={issues.filter(i => isClosed(i.status?.name)).length} 
+                                        val={counts.closed} 
                                         color="text-slate-400" 
                                         icon={Icons.CheckCircle} 
                                         active={filterType === 'closed'}
@@ -406,11 +332,10 @@
                                 <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
                                     <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
                                         <h3 className="font-bold text-slate-700">
-                                            {filterType === 'all' ? '待辦案件列表' : 
-                                             filterType === 'today' ? '今日到期案件' : 
-                                             filterType === 'overdue' ? '逾期案件列表' : 
-                                             filterType === 'my' ? '我的待辦列表' : 
-                                             '已結案歷史紀錄'}
+                                            {filterType === 'all' ? '我的待辦列表' : 
+                                             filterType === 'today' ? '我的今日到期案件' : 
+                                             filterType === 'overdue' ? '我的逾期案件列表' : 
+                                             '我的已結案歷史'}
                                         </h3>
                                     </div>
                                     <div className="overflow-x-auto">
@@ -458,30 +383,24 @@
                                             </tbody>
                                         </table>
                                         {filteredIssues.length === 0 && (
-                                            <div className="p-8 text-center text-slate-400">此篩選條件下沒有案件</div>
+                                            <div className="p-8 text-center text-slate-400">
+                                                {currentUser ? '沒有符合條件的個人案件' : '請先登入以查看您的案件'}
+                                            </div>
                                         )}
                                     </div>
                                 </div>
                             </section>
                         ) : (
                             // Welcome / Empty State
-                            !loading && !error && (
+                            !loading && (
                                 <div className="flex flex-col items-center justify-center py-20 text-center animate-fadeIn">
                                     <div className="bg-white p-4 rounded-full shadow-sm mb-6">
                                         <Icon d={Icons.Activity} className="w-12 h-12 text-slate-300" />
                                     </div>
                                     <h2 className="text-xl font-bold text-slate-700 mb-2">準備開始工作</h2>
                                     <p className="text-slate-500 max-w-md mb-8">
-                                        請在上方輸入您的 Redmine API Token 即可取得資料。<br/>
-                                        如果您部署在 GitHub Pages，請確保選擇「自動選擇 Proxy」模式。
+                                        請在上方輸入您的 Redmine API Token 即可取得資料。
                                     </p>
-                                    <button 
-                                        onClick={loadDemoData}
-                                        className="bg-white border border-slate-200 text-slate-600 hover:text-blue-600 hover:border-blue-200 px-6 py-2 rounded-full font-bold shadow-sm transition-all flex items-center gap-2"
-                                    >
-                                        <Icon d={Icons.Play} className="w-4 h-4" />
-                                        載入範例資料 (Demo)
-                                    </button>
                                 </div>
                             )
                         )}
