@@ -52,7 +52,16 @@
         const isClosed = (statusName) => {
             if (!statusName) return false;
             const s = statusName.toLowerCase();
-            return s === 'closed' || s === 'resolved' || s === 'rejected' || s.includes('已解決') || s.includes('結案') || s.includes('關閉');
+            return s === 'closed' || s === 'resolved' || s === 'rejected' || s.includes('已解決') || s.includes('結案') || s.includes('關閉') || s.includes('完成');
+        };
+
+        const getBaseUrl = (inputUrl) => {
+            try {
+                const urlObj = new URL(inputUrl);
+                return urlObj.origin; 
+            } catch (e) {
+                return inputUrl.replace(/\/$/, '');
+            }
         };
 
         const getStatusColor = (status) => {
@@ -185,7 +194,8 @@
                     const userData = await fetchWithRetry('/users/current.json');
                     
                     // 2. Fetch Issues
-                    const issuesData = await fetchWithRetry('/issues.json?limit=100&status_id=*');
+                    // Update: Increase limit to 500 and sort by updated_on to ensure recent closed issues appear
+                    const issuesData = await fetchWithRetry('/issues.json?limit=500&status_id=*&sort=updated_on:desc');
 
                     // 3. Update State
                     setCurrentUser(userData.user);
@@ -465,9 +475,9 @@
                                             <thead className="bg-slate-50 text-slate-500 uppercase text-xs">
                                                 <tr>
                                                     <th className="px-6 py-3">#</th>
-                                                    <th className="px-6 py-3">狀態</th>
+                                                    <th className="px-6 py-3">驗證</th>
                                                     <th className="px-6 py-3 w-1/3">主題</th>
-                                                    <th className="px-6 py-3">負責人</th>
+                                                    <th className="px-6 py-3">被分派者</th>
                                                     <th className="px-6 py-3">期限</th>
                                                 </tr>
                                             </thead>
