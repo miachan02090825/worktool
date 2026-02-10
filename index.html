@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Redmine 個人戰情室 (正式版)</title>
+    <title>Redmine 專案戰情室 (人員視角版)</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- React & ReactDOM -->
@@ -86,7 +86,8 @@
             Search: <><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></>,
             List: <><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></>,
             Users: <><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></>,
-            CheckCircle: <><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></>
+            CheckCircle: <><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></>,
+            ChevronDown: <polyline points="6 9 12 15 18 9"></polyline>
         };
 
         const Main = () => {
@@ -102,6 +103,11 @@
             const [showSettings, setShowSettings] = useState(false);
             const [issues, setIssues] = useState([]);
             const [currentUser, setCurrentUser] = useState(null);
+            
+            // New State for User Filtering
+            const [selectedUserId, setSelectedUserId] = useState('me'); 
+            const [availableUsers, setAvailableUsers] = useState([]);
+
             const [loading, setLoading] = useState(false);
             const [error, setError] = useState(null);
             
@@ -125,8 +131,7 @@
                     // Quick Proxy Implementation
                     const fetchAPI = async (path) => {
                         // status_id=* to get ALL issues including closed ones
-                        // Note: limit=100. For strict personal dashboards, using &assigned_to_id=me in API is better,
-                        // but keeping filter logic client-side allows seeing team context if needed later.
+                        // limit=100 is standard default max.
                         const target = `${config.url}${path}${path.includes('?')?'&':'?'}key=${config.apiKey}&limit=100&status_id=*`;
                         const url = proxyMode === 'direct' ? target : 
                                    `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`;
@@ -142,6 +147,26 @@
                     
                     setCurrentUser(userRes.user);
                     setIssues(issuesRes.issues);
+
+                    // Extract unique users from issues for the dropdown
+                    const usersMap = new Map();
+                    // Add current user first
+                    if(userRes.user) {
+                        usersMap.set(userRes.user.id, userRes.user.firstname + ' ' + userRes.user.lastname);
+                    }
+                    // Add users found in issues
+                    issuesRes.issues.forEach(issue => {
+                        if (issue.assigned_to) {
+                            usersMap.set(issue.assigned_to.id, issue.assigned_to.name);
+                        }
+                    });
+                    
+                    const userList = Array.from(usersMap, ([id, name]) => ({ id, name }));
+                    setAvailableUsers(userList);
+                    
+                    // Default to current user
+                    setSelectedUserId(userRes.user.id);
+
                 } catch (err) {
                     setError(err.message === 'HTTP 401' ? 'API Token 無效' : '連線失敗，請檢查網址或嘗試不同連線模式');
                 } finally {
@@ -149,26 +174,27 @@
                 }
             };
 
-            // --- Filtering Logic (Strictly Personal) ---
+            // --- Filtering Logic (Dynamic User) ---
             const filteredIssues = useMemo(() => {
-                // First, strictly filter to ONLY issues assigned to the current user
-                let myIssues = issues;
-                if (currentUser) {
-                    myIssues = issues.filter(i => i.assigned_to?.id === currentUser.id);
-                } else if (issues.length > 0) {
-                    // If we have issues but no user matched yet (edge case), return empty to be safe
-                    // or return empty until loaded
-                    return [];
+                // First, filter by the SELECTED user from dropdown
+                // If selectedUserId is 'all', we show everything (optional feature), but let's stick to personal focus
+                let targetIssues = issues;
+                
+                if (selectedUserId && selectedUserId !== 'all') {
+                    // Convert both to string or number to match safely
+                    targetIssues = issues.filter(i => i.assigned_to?.id == selectedUserId);
+                } else if (currentUser && selectedUserId === 'me') {
+                     targetIssues = issues.filter(i => i.assigned_to?.id === currentUser.id);
                 }
 
                 // Case 1: Viewing "Closed" tab
                 if (filterType === 'closed') {
-                    return myIssues.filter(i => isClosed(i.status?.name));
+                    return targetIssues.filter(i => isClosed(i.status?.name));
                 }
 
                 // Case 2: Viewing active tabs (All Pending, Today, Overdue)
                 // Exclude closed issues
-                let activeIssues = myIssues.filter(i => !isClosed(i.status?.name));
+                let activeIssues = targetIssues.filter(i => !isClosed(i.status?.name));
 
                 if (filterType === 'today') {
                     return activeIssues.filter(i => isToday(i.due_date));
@@ -177,26 +203,39 @@
                     return activeIssues.filter(i => isPast(i.due_date));
                 }
                 
-                // 'all' means 'all active assigned to me'
+                // 'all' means 'all active' for this user
                 return activeIssues;
-            }, [issues, filterType, currentUser]);
+            }, [issues, filterType, selectedUserId, currentUser]);
 
-            // --- Helper for Counts (Strictly Personal) ---
+            // --- Helper for Counts (Dynamic User) ---
             const getCounts = () => {
-                if (!currentUser) return { all: 0, today: 0, overdue: 0, closed: 0 };
-                
-                const myIssues = issues.filter(i => i.assigned_to?.id === currentUser.id);
-                const active = myIssues.filter(i => !isClosed(i.status?.name));
+                let targetIssues = issues;
+                if (selectedUserId && selectedUserId !== 'all') {
+                    targetIssues = issues.filter(i => i.assigned_to?.id == selectedUserId);
+                } else if (currentUser && selectedUserId === 'me') {
+                    targetIssues = issues.filter(i => i.assigned_to?.id === currentUser.id);
+                } else if (!currentUser && issues.length === 0) {
+                     return { all: 0, today: 0, overdue: 0, closed: 0 };
+                }
+
+                const active = targetIssues.filter(i => !isClosed(i.status?.name));
                 
                 return {
                     all: active.length,
                     today: active.filter(i => isToday(i.due_date)).length,
                     overdue: active.filter(i => isPast(i.due_date)).length,
-                    closed: myIssues.filter(i => isClosed(i.status?.name)).length
+                    closed: targetIssues.filter(i => isClosed(i.status?.name)).length
                 };
             };
             
             const counts = getCounts();
+
+            // Find selected user name for display
+            const selectedUserName = useMemo(() => {
+                if (!selectedUserId) return '';
+                const u = availableUsers.find(u => u.id == selectedUserId);
+                return u ? u.name : 'Unknown';
+            }, [selectedUserId, availableUsers]);
 
             // --- UI Components ---
             const StatCard = ({ label, val, color, icon, active, onClick }) => (
@@ -225,7 +264,14 @@
                                     </div>
                                     <div>
                                         <h1 className="text-lg font-bold text-slate-800">專案戰情室</h1>
-                                        {currentUser && <p className="text-xs text-slate-500">Hi, {currentUser.firstname} (個人檢視)</p>}
+                                        {currentUser && (
+                                            <p className="text-xs text-slate-500 flex items-center gap-1">
+                                                Hi, {currentUser.firstname} 
+                                                <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full text-[10px]">
+                                                    檢視: {selectedUserName}
+                                                </span>
+                                            </p>
+                                        )}
                                     </div>
                                 </div>
 
@@ -292,10 +338,30 @@
                         {/* Main Content */}
                         {issues.length > 0 ? (
                             <section className="animate-fadeIn">
+                                {/* Toolbar: User Selector */}
+                                <div className="flex justify-end mb-4">
+                                    <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm">
+                                        <Icon d={Icons.User} className="w-4 h-4 text-slate-400" />
+                                        <span className="text-xs text-slate-500">檢視人員:</span>
+                                        <select 
+                                            className="text-sm font-bold text-slate-700 outline-none bg-transparent cursor-pointer min-w-[120px]"
+                                            value={selectedUserId}
+                                            onChange={(e) => {
+                                                setSelectedUserId(e.target.value);
+                                                setFilterType('all'); // Reset filter when user changes
+                                            }}
+                                        >
+                                            {availableUsers.map(u => (
+                                                <option key={u.id} value={u.id}>{u.name}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+
                                 {/* Stats - 4 Columns for Personal View */}
                                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
                                     <StatCard 
-                                        label="我的待辦" 
+                                        label={`${selectedUserName} 的待辦`} 
                                         val={counts.all} 
                                         color="text-slate-800" 
                                         icon={Icons.List} 
@@ -331,11 +397,14 @@
                                 {/* List */}
                                 <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
                                     <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                                        <h3 className="font-bold text-slate-700">
-                                            {filterType === 'all' ? '我的待辦列表' : 
-                                             filterType === 'today' ? '我的今日到期案件' : 
-                                             filterType === 'overdue' ? '我的逾期案件列表' : 
-                                             '我的已結案歷史'}
+                                        <h3 className="font-bold text-slate-700 flex items-center gap-2">
+                                            {filterType === 'all' ? '待辦案件列表' : 
+                                             filterType === 'today' ? '今日到期案件' : 
+                                             filterType === 'overdue' ? '逾期案件列表' : 
+                                             '已結案歷史紀錄'}
+                                            <span className="text-xs font-normal text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
+                                                {selectedUserName}
+                                            </span>
                                         </h3>
                                     </div>
                                     <div className="overflow-x-auto">
@@ -384,7 +453,7 @@
                                         </table>
                                         {filteredIssues.length === 0 && (
                                             <div className="p-8 text-center text-slate-400">
-                                                {currentUser ? '沒有符合條件的個人案件' : '請先登入以查看您的案件'}
+                                                {currentUser ? `沒有符合條件的案件 (${selectedUserName})` : '請先登入'}
                                             </div>
                                         )}
                                     </div>
