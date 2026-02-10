@@ -87,7 +87,8 @@
             List: <><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></>,
             Users: <><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></>,
             CheckCircle: <><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></>,
-            ChevronDown: <polyline points="6 9 12 15 18 9"></polyline>
+            ChevronDown: <polyline points="6 9 12 15 18 9"></polyline>,
+            Info: <><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></>
         };
 
         const Main = () => {
@@ -124,38 +125,61 @@
 
             // --- Fetch Logic ---
             const fetchData = async () => {
-                if (!config.apiKey) { setError('請先輸入 API Token'); return; }
+                if (!config.apiKey) { setError({ title: '缺少資料', msg: '請先輸入 API Token' }); return; }
                 setLoading(true); setError(null);
 
-                try {
-                    // Quick Proxy Implementation
-                    const fetchAPI = async (path) => {
-                        // status_id=* to get ALL issues including closed ones
-                        // limit=100 is standard default max.
-                        const target = `${config.url}${path}${path.includes('?')?'&':'?'}key=${config.apiKey}&limit=100&status_id=*`;
-                        const url = proxyMode === 'direct' ? target : 
-                                   `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`;
-                        const res = await fetch(url, proxyMode === 'direct' ? { headers: {'X-Redmine-API-Key': config.apiKey}} : {});
-                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                        return await res.json();
-                    };
+                const cleanUrl = config.url.replace(/\/$/, '');
 
-                    const [userRes, issuesRes] = await Promise.all([
-                        fetchAPI('/users/current.json'),
-                        fetchAPI('/issues.json')
-                    ]);
+                try {
+                    // 1. Fetch User Info
+                    const apiPath = '/users/current.json';
+                    let fetchUrl = '';
                     
-                    setCurrentUser(userRes.user);
-                    setIssues(issuesRes.issues);
+                    if (proxyMode === 'direct') {
+                        fetchUrl = `${cleanUrl}${apiPath}?key=${config.apiKey}`;
+                    } else {
+                        // Public Proxy (AllOrigins)
+                        const target = `${cleanUrl}${apiPath}?key=${config.apiKey}`;
+                        fetchUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`;
+                    }
+
+                    const userRes = await fetch(fetchUrl);
+                    
+                    if (!userRes.ok) {
+                         if (userRes.status === 401) throw new Error('AUTH_401');
+                         if (userRes.status === 404) throw new Error('URL_404');
+                         throw new Error(`HTTP_${userRes.status}`);
+                    }
+                    const userData = await userRes.json();
+                    
+                    // 2. Fetch Issues
+                    const issuePath = '/issues.json';
+                    const issueQuery = `?key=${config.apiKey}&limit=100&status_id=*`;
+                    let issuesUrl = '';
+
+                    if (proxyMode === 'direct') {
+                        issuesUrl = `${cleanUrl}${issuePath}${issueQuery}`;
+                    } else {
+                        const target = `${cleanUrl}${issuePath}${issueQuery}`;
+                        issuesUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`;
+                    }
+
+                    const issuesRes = await fetch(issuesUrl);
+                    if (!issuesRes.ok) throw new Error(`HTTP_${issuesRes.status}`);
+                    const issuesData = await issuesRes.json();
+                    
+                    // 3. Update State
+                    setCurrentUser(userData.user);
+                    setIssues(issuesData.issues);
 
                     // Extract unique users from issues for the dropdown
                     const usersMap = new Map();
                     // Add current user first
-                    if(userRes.user) {
-                        usersMap.set(userRes.user.id, userRes.user.firstname + ' ' + userRes.user.lastname);
+                    if(userData.user) {
+                        usersMap.set(userData.user.id, userData.user.firstname + ' ' + userData.user.lastname);
                     }
                     // Add users found in issues
-                    issuesRes.issues.forEach(issue => {
+                    issuesData.issues.forEach(issue => {
                         if (issue.assigned_to) {
                             usersMap.set(issue.assigned_to.id, issue.assigned_to.name);
                         }
@@ -165,10 +189,37 @@
                     setAvailableUsers(userList);
                     
                     // Default to current user
-                    setSelectedUserId(userRes.user.id);
+                    setSelectedUserId(userData.user.id);
 
                 } catch (err) {
-                    setError(err.message === 'HTTP 401' ? 'API Token 無效' : '連線失敗，請檢查網址或嘗試不同連線模式');
+                    console.error("Fetch Error:", err);
+                    
+                    let errorMsg = { title: '連線失敗', msg: err.message, hint: '' };
+
+                    if (err.message === 'AUTH_401') {
+                        errorMsg = { title: '權限錯誤 (401)', msg: 'API Token 無效或該帳號沒有權限。', hint: '請檢查您的 API Key 是否正確。' };
+                    } else if (err.message === 'URL_404') {
+                        errorMsg = { title: '找不到位置 (404)', msg: 'Redmine 網址可能錯誤，找不到 API 端點。', hint: '請確認網址是否包含 http/https 且不含子路徑錯誤。' };
+                    } else if (err.name === 'TypeError' && err.message.includes('fetch')) {
+                         // Network error / CORS
+                         if (proxyMode === 'direct') {
+                             errorMsg = { 
+                                 title: '網路或 CORS 錯誤', 
+                                 msg: '瀏覽器擋下了連線請求 (CORS)。', 
+                                 hint: '建議切換為「公共 Proxy」模式，或安裝 Allow CORS 擴充套件。' 
+                             };
+                         } else {
+                             errorMsg = { 
+                                 title: 'Proxy 連線失敗', 
+                                 msg: '代理伺服器無法存取您的 Redmine (可能是內網環境)。', 
+                                 hint: '若您的 Redmine 在內網，請改用「直連模式」並安裝 CORS 解除套件。' 
+                             };
+                         }
+                    } else if (err.message.startsWith('HTTP_')) {
+                        errorMsg = { title: `伺服器錯誤 (${err.message})`, msg: 'Redmine 伺服器回傳了錯誤狀態。', hint: '請稍後再試或檢查伺服器狀態。' };
+                    }
+
+                    setError(errorMsg);
                 } finally {
                     setLoading(false);
                 }
@@ -177,11 +228,9 @@
             // --- Filtering Logic (Dynamic User) ---
             const filteredIssues = useMemo(() => {
                 // First, filter by the SELECTED user from dropdown
-                // If selectedUserId is 'all', we show everything (optional feature), but let's stick to personal focus
                 let targetIssues = issues;
                 
                 if (selectedUserId && selectedUserId !== 'all') {
-                    // Convert both to string or number to match safely
                     targetIssues = issues.filter(i => i.assigned_to?.id == selectedUserId);
                 } else if (currentUser && selectedUserId === 'me') {
                      targetIssues = issues.filter(i => i.assigned_to?.id === currentUser.id);
@@ -330,8 +379,18 @@
 
                     <main className="max-w-7xl mx-auto px-4 py-6 space-y-8">
                         {error && (
-                            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-center gap-2">
-                                <Icon d={Icons.Alert} className="w-5 h-5" /> {error}
+                            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-4 rounded-lg flex items-start gap-3 animate-fadeIn shadow-sm">
+                                <div className="mt-1"><Icon d={Icons.Alert} className="w-5 h-5" /></div>
+                                <div>
+                                    <p className="font-bold text-lg">{error.title || '發生錯誤'}</p>
+                                    <p className="text-sm mt-1">{error.msg}</p>
+                                    {error.hint && (
+                                        <div className="mt-2 text-sm bg-red-100 bg-opacity-50 p-2 rounded text-red-800 flex gap-2 items-center">
+                                            <Icon d={Icons.Info} className="w-4 h-4" />
+                                            <span>💡 提示：{error.hint}</span>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         )}
 
