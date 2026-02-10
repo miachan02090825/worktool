@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Redmine 專案戰情室 (人員視角版)</title>
+    <title>Redmine 專案戰情室 (穩定連線版)</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- React & ReactDOM -->
@@ -20,6 +20,8 @@
         ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
         .animate-fadeIn { animation: fadeIn 0.3s ease-out forwards; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .animate-spin-slow { animation: spin 2s linear infinite; }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-900 font-sans">
@@ -53,15 +55,6 @@
             return s === 'closed' || s === 'resolved' || s === 'rejected' || s.includes('已解決') || s.includes('結案') || s.includes('關閉');
         };
 
-        const getBaseUrl = (inputUrl) => {
-            try {
-                const urlObj = new URL(inputUrl);
-                return urlObj.origin; 
-            } catch (e) {
-                return inputUrl.replace(/\/$/, '');
-            }
-        };
-
         const getStatusColor = (status) => {
             const s = status.toLowerCase();
             if (s === 'new' || s === '新建') return 'bg-blue-100 text-blue-800 border-blue-200';
@@ -85,10 +78,9 @@
             Settings: <><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></>,
             Search: <><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></>,
             List: <><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></>,
-            Users: <><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></>,
             CheckCircle: <><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></>,
-            ChevronDown: <polyline points="6 9 12 15 18 9"></polyline>,
-            Info: <><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></>
+            Info: <><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></>,
+            Refresh: <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
         };
 
         const Main = () => {
@@ -111,6 +103,7 @@
 
             const [loading, setLoading] = useState(false);
             const [error, setError] = useState(null);
+            const [statusMsg, setStatusMsg] = useState('');
             
             // UI Filters: 'all' (open), 'today', 'overdue', 'closed'
             const [filterType, setFilterType] = useState('all'); 
@@ -123,100 +116,103 @@
                 localStorage.setItem('redmine_proxyMode', proxyMode);
             }, [config, proxyMode]);
 
-            // --- Fetch Logic ---
+            // --- Fetch Logic (Enhanced Resilience) ---
             const fetchData = async () => {
                 if (!config.apiKey) { setError({ title: '缺少資料', msg: '請先輸入 API Token' }); return; }
-                setLoading(true); setError(null);
+                setLoading(true); 
+                setError(null);
+                setStatusMsg('準備連線...');
 
                 const cleanUrl = config.url.replace(/\/$/, '');
 
-                try {
-                    // 1. Fetch User Info
-                    const apiPath = '/users/current.json';
-                    let fetchUrl = '';
-                    
-                    if (proxyMode === 'direct') {
-                        fetchUrl = `${cleanUrl}${apiPath}?key=${config.apiKey}`;
-                    } else {
-                        // Public Proxy (AllOrigins)
-                        const target = `${cleanUrl}${apiPath}?key=${config.apiKey}`;
-                        fetchUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`;
-                    }
+                // Define Proxy Providers for Rotation
+                const proxyProviders = proxyMode === 'direct' 
+                    ? [{ name: 'Direct', fn: (url) => url }] 
+                    : [
+                        { name: 'AllOrigins', fn: (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}` },
+                        { name: 'CorsProxy.io', fn: (url) => `https://corsproxy.io/?${encodeURIComponent(url)}` },
+                        { name: 'CodeTabs', fn: (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}` }
+                    ];
 
-                    const userRes = await fetch(fetchUrl);
-                    
-                    if (!userRes.ok) {
-                         if (userRes.status === 401) throw new Error('AUTH_401');
-                         if (userRes.status === 404) throw new Error('URL_404');
-                         throw new Error(`HTTP_${userRes.status}`);
+                // Generic Fetcher with Retry
+                const fetchWithRetry = async (apiPath) => {
+                    const targetUrl = `${cleanUrl}${apiPath}`;
+                    let lastErr = null;
+
+                    for (const provider of proxyProviders) {
+                        try {
+                            setStatusMsg(`嘗試連線中 (${provider.name})...`);
+                            const fetchUrl = provider.fn(targetUrl);
+                            
+                            // Add headers only for Direct mode to avoid CORS preflight issues on some proxies
+                            const options = proxyMode === 'direct' 
+                                ? { headers: { 'X-Redmine-API-Key': config.apiKey } } 
+                                : {};
+
+                            // If not direct, append key to query params for safety as some proxies strip headers
+                            const finalUrl = proxyMode === 'direct' 
+                                ? fetchUrl 
+                                : (fetchUrl.includes('?') ? `${fetchUrl}&key=${config.apiKey}` : `${fetchUrl}?key=${config.apiKey}`);
+
+                            const res = await fetch(finalUrl, options);
+                            
+                            if (res.ok) {
+                                return await res.json();
+                            }
+                            
+                            if (res.status === 401) throw new Error('AUTH_401');
+                            if (res.status === 404) throw new Error('URL_404');
+                            throw new Error(`HTTP_${res.status}`);
+
+                        } catch (err) {
+                            console.warn(`Provider ${provider.name} failed:`, err);
+                            lastErr = err;
+                            // If it's an Auth/404 error, don't retry other proxies, it's a config issue
+                            if (err.message === 'AUTH_401' || err.message === 'URL_404') throw err;
+                        }
                     }
-                    const userData = await userRes.json();
+                    throw lastErr || new Error('ALL_PROXIES_FAILED');
+                };
+
+                try {
+                    // 1. Fetch User
+                    const userData = await fetchWithRetry('/users/current.json');
                     
                     // 2. Fetch Issues
-                    const issuePath = '/issues.json';
-                    const issueQuery = `?key=${config.apiKey}&limit=100&status_id=*`;
-                    let issuesUrl = '';
+                    const issuesData = await fetchWithRetry('/issues.json?limit=100&status_id=*');
 
-                    if (proxyMode === 'direct') {
-                        issuesUrl = `${cleanUrl}${issuePath}${issueQuery}`;
-                    } else {
-                        const target = `${cleanUrl}${issuePath}${issueQuery}`;
-                        issuesUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`;
-                    }
-
-                    const issuesRes = await fetch(issuesUrl);
-                    if (!issuesRes.ok) throw new Error(`HTTP_${issuesRes.status}`);
-                    const issuesData = await issuesRes.json();
-                    
                     // 3. Update State
                     setCurrentUser(userData.user);
                     setIssues(issuesData.issues);
 
-                    // Extract unique users from issues for the dropdown
+                    // Extract unique users
                     const usersMap = new Map();
-                    // Add current user first
-                    if(userData.user) {
-                        usersMap.set(userData.user.id, userData.user.firstname + ' ' + userData.user.lastname);
-                    }
-                    // Add users found in issues
+                    if(userData.user) usersMap.set(userData.user.id, userData.user.firstname + ' ' + userData.user.lastname);
                     issuesData.issues.forEach(issue => {
-                        if (issue.assigned_to) {
-                            usersMap.set(issue.assigned_to.id, issue.assigned_to.name);
-                        }
+                        if (issue.assigned_to) usersMap.set(issue.assigned_to.id, issue.assigned_to.name);
                     });
+                    setAvailableUsers(Array.from(usersMap, ([id, name]) => ({ id, name })));
                     
-                    const userList = Array.from(usersMap, ([id, name]) => ({ id, name }));
-                    setAvailableUsers(userList);
-                    
-                    // Default to current user
-                    setSelectedUserId(userData.user.id);
+                    // Default to current user if not set
+                    if (selectedUserId === 'me' || !availableUsers.find(u => u.id == selectedUserId)) {
+                        setSelectedUserId(userData.user.id);
+                    }
 
+                    setStatusMsg('');
                 } catch (err) {
                     console.error("Fetch Error:", err);
-                    
                     let errorMsg = { title: '連線失敗', msg: err.message, hint: '' };
 
                     if (err.message === 'AUTH_401') {
-                        errorMsg = { title: '權限錯誤 (401)', msg: 'API Token 無效或該帳號沒有權限。', hint: '請檢查您的 API Key 是否正確。' };
+                        errorMsg = { title: '權限錯誤 (401)', msg: 'API Token 無效。', hint: '請檢查 Token 是否正確。' };
                     } else if (err.message === 'URL_404') {
-                        errorMsg = { title: '找不到位置 (404)', msg: 'Redmine 網址可能錯誤，找不到 API 端點。', hint: '請確認網址是否包含 http/https 且不含子路徑錯誤。' };
-                    } else if (err.name === 'TypeError' && err.message.includes('fetch')) {
-                         // Network error / CORS
-                         if (proxyMode === 'direct') {
-                             errorMsg = { 
-                                 title: '網路或 CORS 錯誤', 
-                                 msg: '瀏覽器擋下了連線請求 (CORS)。', 
-                                 hint: '建議切換為「公共 Proxy」模式，或安裝 Allow CORS 擴充套件。' 
-                             };
-                         } else {
-                             errorMsg = { 
-                                 title: 'Proxy 連線失敗', 
-                                 msg: '代理伺服器無法存取您的 Redmine (可能是內網環境)。', 
-                                 hint: '若您的 Redmine 在內網，請改用「直連模式」並安裝 CORS 解除套件。' 
-                             };
-                         }
-                    } else if (err.message.startsWith('HTTP_')) {
-                        errorMsg = { title: `伺服器錯誤 (${err.message})`, msg: 'Redmine 伺服器回傳了錯誤狀態。', hint: '請稍後再試或檢查伺服器狀態。' };
+                        errorMsg = { title: '網址錯誤 (404)', msg: '找不到 Redmine 主機。', hint: '請檢查網址輸入是否有誤。' };
+                    } else if (err.message === 'ALL_PROXIES_FAILED' || err.message.includes('Failed to fetch')) {
+                        errorMsg = { 
+                            title: '無法建立連線', 
+                            msg: '所有代理伺服器皆無法存取您的 Redmine。', 
+                            hint: '若您在公司內網，請切換為「直連模式」並安裝 Allow CORS 套件。若為外網，可能是 Redmine 阻擋了代理 IP。' 
+                        };
                     }
 
                     setError(errorMsg);
@@ -225,9 +221,8 @@
                 }
             };
 
-            // --- Filtering Logic (Dynamic User) ---
+            // --- Filtering Logic ---
             const filteredIssues = useMemo(() => {
-                // First, filter by the SELECTED user from dropdown
                 let targetIssues = issues;
                 
                 if (selectedUserId && selectedUserId !== 'all') {
@@ -236,28 +231,17 @@
                      targetIssues = issues.filter(i => i.assigned_to?.id === currentUser.id);
                 }
 
-                // Case 1: Viewing "Closed" tab
-                if (filterType === 'closed') {
-                    return targetIssues.filter(i => isClosed(i.status?.name));
-                }
+                if (filterType === 'closed') return targetIssues.filter(i => isClosed(i.status?.name));
 
-                // Case 2: Viewing active tabs (All Pending, Today, Overdue)
-                // Exclude closed issues
                 let activeIssues = targetIssues.filter(i => !isClosed(i.status?.name));
 
-                if (filterType === 'today') {
-                    return activeIssues.filter(i => isToday(i.due_date));
-                }
-                if (filterType === 'overdue') {
-                    return activeIssues.filter(i => isPast(i.due_date));
-                }
+                if (filterType === 'today') return activeIssues.filter(i => isToday(i.due_date));
+                if (filterType === 'overdue') return activeIssues.filter(i => isPast(i.due_date));
                 
-                // 'all' means 'all active' for this user
                 return activeIssues;
             }, [issues, filterType, selectedUserId, currentUser]);
 
-            // --- Helper for Counts (Dynamic User) ---
-            const getCounts = () => {
+            const counts = useMemo(() => {
                 let targetIssues = issues;
                 if (selectedUserId && selectedUserId !== 'all') {
                     targetIssues = issues.filter(i => i.assigned_to?.id == selectedUserId);
@@ -268,18 +252,14 @@
                 }
 
                 const active = targetIssues.filter(i => !isClosed(i.status?.name));
-                
                 return {
                     all: active.length,
                     today: active.filter(i => isToday(i.due_date)).length,
                     overdue: active.filter(i => isPast(i.due_date)).length,
                     closed: targetIssues.filter(i => isClosed(i.status?.name)).length
                 };
-            };
-            
-            const counts = getCounts();
+            }, [issues, selectedUserId, currentUser]);
 
-            // Find selected user name for display
             const selectedUserName = useMemo(() => {
                 if (!selectedUserId) return '';
                 const u = availableUsers.find(u => u.id == selectedUserId);
@@ -336,9 +316,10 @@
                                     <button 
                                         onClick={fetchData} 
                                         disabled={loading}
-                                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded text-sm font-bold flex items-center gap-2"
+                                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded text-sm font-bold flex items-center gap-2 transition-colors disabled:bg-slate-400"
                                     >
-                                        {loading ? '讀取中...' : <><Icon d={Icons.Search} className="w-4 h-4" /> 分析</>}
+                                        {loading ? <Icon d={Icons.Refresh} className="w-4 h-4 animate-spin-slow" /> : <Icon d={Icons.Search} className="w-4 h-4" />}
+                                        {loading ? '連線中...' : '分析'}
                                     </button>
 
                                     <button 
@@ -378,6 +359,13 @@
                     </header>
 
                     <main className="max-w-7xl mx-auto px-4 py-6 space-y-8">
+                        {/* Loading Status */}
+                        {loading && (
+                            <div className="text-center text-blue-600 text-sm font-bold animate-pulse bg-blue-50 py-2 rounded">
+                                {statusMsg}
+                            </div>
+                        )}
+
                         {error && (
                             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-4 rounded-lg flex items-start gap-3 animate-fadeIn shadow-sm">
                                 <div className="mt-1"><Icon d={Icons.Alert} className="w-5 h-5" /></div>
@@ -407,7 +395,7 @@
                                             value={selectedUserId}
                                             onChange={(e) => {
                                                 setSelectedUserId(e.target.value);
-                                                setFilterType('all'); // Reset filter when user changes
+                                                setFilterType('all'); 
                                             }}
                                         >
                                             {availableUsers.map(u => (
@@ -417,7 +405,7 @@
                                     </div>
                                 </div>
 
-                                {/* Stats - 4 Columns for Personal View */}
+                                {/* Stats */}
                                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
                                     <StatCard 
                                         label={`${selectedUserName} 的待辦`} 
@@ -520,7 +508,7 @@
                             </section>
                         ) : (
                             // Welcome / Empty State
-                            !loading && (
+                            !loading && !error && (
                                 <div className="flex flex-col items-center justify-center py-20 text-center animate-fadeIn">
                                     <div className="bg-white p-4 rounded-full shadow-sm mb-6">
                                         <Icon d={Icons.Activity} className="w-12 h-12 text-slate-300" />
