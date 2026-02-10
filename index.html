@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Redmine 專案戰情室 (穩定連線版)</title>
+    <title>Redmine 專案戰情室 (精準個人版)</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- React & ReactDOM -->
@@ -67,9 +67,10 @@
         const getStatusColor = (status) => {
             const s = status.toLowerCase();
             if (s === 'new' || s === '新建') return 'bg-blue-100 text-blue-800 border-blue-200';
-            if (s.includes('progress') || s.includes('進行')) return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+            if (s.includes('progress') || s.includes('進行') || s.includes('實作') || s.includes('處理')) return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+            if (s.includes('hold') || s.includes('擱置') || s.includes('暫停')) return 'bg-orange-100 text-orange-800 border-orange-200';
             if (s === 'closed' || s === 'resolved' || s.includes('已解決') || s.includes('結案') || s.includes('關閉')) return 'bg-slate-100 text-slate-500 border-slate-200';
-            if (s === 'feedback' || s.includes('回饋')) return 'bg-purple-100 text-purple-800 border-purple-200';
+            if (s === 'feedback' || s.includes('回饋') || s.includes('驗證')) return 'bg-purple-100 text-purple-800 border-purple-200';
             return 'bg-slate-50 text-slate-700 border-slate-200';
         };
 
@@ -89,7 +90,8 @@
             List: <><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></>,
             CheckCircle: <><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></>,
             Info: <><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></>,
-            Refresh: <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            Refresh: <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>,
+            Target: <circle cx="12" cy="12" r="10"></circle>
         };
 
         const Main = () => {
@@ -102,11 +104,14 @@
                 projectId: safeGet('redmine_projectId', '')
             });
             const [proxyMode, setProxyMode] = useState(safeGet('redmine_proxyMode', 'public'));
+            // New: Scope state (me vs all)
+            const [fetchScope, setFetchScope] = useState(safeGet('redmine_fetchScope', 'me'));
+            
             const [showSettings, setShowSettings] = useState(false);
             const [issues, setIssues] = useState([]);
             const [currentUser, setCurrentUser] = useState(null);
             
-            // New State for User Filtering
+            // User Filtering
             const [selectedUserId, setSelectedUserId] = useState('me'); 
             const [availableUsers, setAvailableUsers] = useState([]);
 
@@ -123,9 +128,10 @@
                 localStorage.setItem('redmine_apiKey', config.apiKey);
                 localStorage.setItem('redmine_projectId', config.projectId);
                 localStorage.setItem('redmine_proxyMode', proxyMode);
-            }, [config, proxyMode]);
+                localStorage.setItem('redmine_fetchScope', fetchScope);
+            }, [config, proxyMode, fetchScope]);
 
-            // --- Fetch Logic (Enhanced Resilience) ---
+            // --- Fetch Logic (Enhanced) ---
             const fetchData = async () => {
                 if (!config.apiKey) { setError({ title: '缺少資料', msg: '請先輸入 API Token' }); return; }
                 setLoading(true); 
@@ -134,7 +140,6 @@
 
                 const cleanUrl = config.url.replace(/\/$/, '');
 
-                // Define Proxy Providers for Rotation
                 const proxyProviders = proxyMode === 'direct' 
                     ? [{ name: 'Direct', fn: (url) => url }] 
                     : [
@@ -143,12 +148,9 @@
                         { name: 'CodeTabs', fn: (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}` }
                     ];
 
-                // Generic Fetcher with Retry
                 const fetchWithRetry = async (apiPath) => {
                     let targetUrl = `${cleanUrl}${apiPath}`;
                     
-                    // Critical Fix: For proxies, we MUST include the key in the target URL itself before encoding
-                    // because most proxies won't forward custom headers or query params appended outside.
                     if (proxyMode !== 'direct') {
                         const separator = targetUrl.includes('?') ? '&' : '?';
                         targetUrl = `${targetUrl}${separator}key=${config.apiKey}`;
@@ -159,30 +161,18 @@
                     for (const provider of proxyProviders) {
                         try {
                             setStatusMsg(`嘗試連線中 (${provider.name})...`);
-                            
-                            // Generate the proxy URL with the already-authenticated target URL
                             const finalUrl = provider.fn(targetUrl);
-                            
-                            // Add headers only for Direct mode to avoid CORS preflight issues on some proxies
-                            // For proxies, the key is already in the targetUrl above
-                            const options = proxyMode === 'direct' 
-                                ? { headers: { 'X-Redmine-API-Key': config.apiKey } } 
-                                : {};
+                            const options = proxyMode === 'direct' ? { headers: { 'X-Redmine-API-Key': config.apiKey } } : {};
 
                             const res = await fetch(finalUrl, options);
-                            
-                            if (res.ok) {
-                                return await res.json();
-                            }
+                            if (res.ok) return await res.json();
                             
                             if (res.status === 401) throw new Error('AUTH_401');
                             if (res.status === 404) throw new Error('URL_404');
                             throw new Error(`HTTP_${res.status}`);
-
                         } catch (err) {
                             console.warn(`Provider ${provider.name} failed:`, err);
                             lastErr = err;
-                            // If it's an Auth/404 error, don't retry other proxies, it's a config issue
                             if (err.message === 'AUTH_401' || err.message === 'URL_404') throw err;
                         }
                     }
@@ -193,9 +183,17 @@
                     // 1. Fetch User
                     const userData = await fetchWithRetry('/users/current.json');
                     
-                    // 2. Fetch Issues
-                    // Update: Increase limit to 500 and sort by updated_on to ensure recent closed issues appear
-                    const issuesData = await fetchWithRetry('/issues.json?limit=500&status_id=*&sort=updated_on:desc');
+                    // 2. Fetch Issues (Dynamic Scope)
+                    // If scope is 'me', force assigned_to_id=me to ensure we get user's issues regardless of update date
+                    // If scope is 'all', use default global fetch
+                    let issueParams = 'limit=500&status_id=*&sort=updated_on:desc';
+                    if (fetchScope === 'me') {
+                        issueParams += '&assigned_to_id=me';
+                    } else if (config.projectId) {
+                        issueParams += `&project_id=${config.projectId}`;
+                    }
+
+                    const issuesData = await fetchWithRetry(`/issues.json?${issueParams}`);
 
                     // 3. Update State
                     setCurrentUser(userData.user);
@@ -209,9 +207,12 @@
                     });
                     setAvailableUsers(Array.from(usersMap, ([id, name]) => ({ id, name })));
                     
-                    // Default to current user if not set
-                    if (selectedUserId === 'me' || !availableUsers.find(u => u.id == selectedUserId)) {
-                        setSelectedUserId(userData.user.id);
+                    // Reset selected user logic
+                    if (fetchScope === 'me') {
+                        setSelectedUserId('me'); // When fetching 'me', lock filter to 'me'
+                    } else {
+                        // In 'all' mode, try to keep selection or default to me
+                        if (!selectedUserId || selectedUserId === 'me') setSelectedUserId(userData.user.id);
                     }
 
                     setStatusMsg('');
@@ -219,17 +220,9 @@
                     console.error("Fetch Error:", err);
                     let errorMsg = { title: '連線失敗', msg: err.message, hint: '' };
 
-                    if (err.message === 'AUTH_401') {
-                        errorMsg = { title: '權限錯誤 (401)', msg: 'API Token 無效。', hint: '請檢查 Token 是否正確。' };
-                    } else if (err.message === 'URL_404') {
-                        errorMsg = { title: '網址錯誤 (404)', msg: '找不到 Redmine 主機。', hint: '請檢查網址輸入是否有誤。' };
-                    } else if (err.message === 'ALL_PROXIES_FAILED' || err.message.includes('Failed to fetch')) {
-                        errorMsg = { 
-                            title: '無法建立連線', 
-                            msg: '所有代理伺服器皆無法存取您的 Redmine。', 
-                            hint: '若您在公司內網，請切換為「直連模式」並安裝 Allow CORS 套件。若為外網，可能是 Redmine 阻擋了代理 IP。' 
-                        };
-                    }
+                    if (err.message === 'AUTH_401') errorMsg = { title: '權限錯誤 (401)', msg: 'API Token 無效。', hint: '請檢查 Token 是否正確。' };
+                    else if (err.message === 'URL_404') errorMsg = { title: '網址錯誤 (404)', msg: '找不到 Redmine 主機。', hint: '請檢查網址輸入是否有誤。' };
+                    else if (err.message === 'ALL_PROXIES_FAILED' || err.message.includes('Failed to fetch')) errorMsg = { title: '無法建立連線', msg: '所有代理伺服器皆無法存取您的 Redmine。', hint: '若您在公司內網，請切換為「直連模式」並安裝 Allow CORS 套件。' };
 
                     setError(errorMsg);
                 } finally {
@@ -241,9 +234,12 @@
             const filteredIssues = useMemo(() => {
                 let targetIssues = issues;
                 
-                if (selectedUserId && selectedUserId !== 'all') {
+                // Filter by User Selection
+                if (selectedUserId && selectedUserId !== 'all' && selectedUserId !== 'me') {
                     targetIssues = issues.filter(i => i.assigned_to?.id == selectedUserId);
-                } else if (currentUser && selectedUserId === 'me') {
+                } else if (currentUser && (selectedUserId === 'me' || fetchScope === 'me')) {
+                     // If fetchScope is 'me', the API response is ALREADY filtered, but good to double check
+                     // or if we are in 'all' mode but selected 'me'
                      targetIssues = issues.filter(i => i.assigned_to?.id === currentUser.id);
                 }
 
@@ -255,13 +251,13 @@
                 if (filterType === 'overdue') return activeIssues.filter(i => isPast(i.due_date));
                 
                 return activeIssues;
-            }, [issues, filterType, selectedUserId, currentUser]);
+            }, [issues, filterType, selectedUserId, currentUser, fetchScope]);
 
             const counts = useMemo(() => {
                 let targetIssues = issues;
-                if (selectedUserId && selectedUserId !== 'all') {
+                if (selectedUserId && selectedUserId !== 'all' && selectedUserId !== 'me') {
                     targetIssues = issues.filter(i => i.assigned_to?.id == selectedUserId);
-                } else if (currentUser && selectedUserId === 'me') {
+                } else if (currentUser && (selectedUserId === 'me' || fetchScope === 'me')) {
                     targetIssues = issues.filter(i => i.assigned_to?.id === currentUser.id);
                 } else if (!currentUser && issues.length === 0) {
                      return { all: 0, today: 0, overdue: 0, closed: 0 };
@@ -274,13 +270,13 @@
                     overdue: active.filter(i => isPast(i.due_date)).length,
                     closed: targetIssues.filter(i => isClosed(i.status?.name)).length
                 };
-            }, [issues, selectedUserId, currentUser]);
+            }, [issues, selectedUserId, currentUser, fetchScope]);
 
             const selectedUserName = useMemo(() => {
-                if (!selectedUserId) return '';
+                if (!selectedUserId || selectedUserId === 'me') return currentUser ? `${currentUser.firstname} ${currentUser.lastname}` : '本人';
                 const u = availableUsers.find(u => u.id == selectedUserId);
                 return u ? u.name : 'Unknown';
-            }, [selectedUserId, availableUsers]);
+            }, [selectedUserId, availableUsers, currentUser]);
 
             // --- UI Components ---
             const StatCard = ({ label, val, color, icon, active, onClick }) => (
@@ -312,8 +308,8 @@
                                         {currentUser && (
                                             <p className="text-xs text-slate-500 flex items-center gap-1">
                                                 Hi, {currentUser.firstname} 
-                                                <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full text-[10px]">
-                                                    檢視: {selectedUserName}
+                                                <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${fetchScope === 'me' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'}`}>
+                                                    {fetchScope === 'me' ? '模式：僅限本人' : '模式：全域/專案'}
                                                 </span>
                                             </p>
                                         )}
@@ -321,6 +317,17 @@
                                 </div>
 
                                 <div className="flex items-center gap-2">
+                                    {/* Scope Selector */}
+                                    <select
+                                        className="bg-slate-50 border border-slate-200 rounded px-2 py-1.5 text-sm w-28 focus:ring-2 focus:ring-blue-500 outline-none text-slate-700 font-medium"
+                                        value={fetchScope}
+                                        onChange={(e) => setFetchScope(e.target.value)}
+                                        title="搜尋範圍"
+                                    >
+                                        <option value="me">僅限本人</option>
+                                        <option value="all">全域/專案</option>
+                                    </select>
+
                                     <input 
                                         type="password" 
                                         placeholder="輸入 Token" 
@@ -401,25 +408,28 @@
                         {/* Main Content */}
                         {issues.length > 0 ? (
                             <section className="animate-fadeIn">
-                                {/* Toolbar: User Selector */}
-                                <div className="flex justify-end mb-4">
-                                    <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm">
-                                        <Icon d={Icons.User} className="w-4 h-4 text-slate-400" />
-                                        <span className="text-xs text-slate-500">檢視人員:</span>
-                                        <select 
-                                            className="text-sm font-bold text-slate-700 outline-none bg-transparent cursor-pointer min-w-[120px]"
-                                            value={selectedUserId}
-                                            onChange={(e) => {
-                                                setSelectedUserId(e.target.value);
-                                                setFilterType('all'); 
-                                            }}
-                                        >
-                                            {availableUsers.map(u => (
-                                                <option key={u.id} value={u.id}>{u.name}</option>
-                                            ))}
-                                        </select>
+                                {/* Toolbar: User Selector (Only visible in ALL mode) */}
+                                {fetchScope === 'all' && (
+                                    <div className="flex justify-end mb-4">
+                                        <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm">
+                                            <Icon d={Icons.User} className="w-4 h-4 text-slate-400" />
+                                            <span className="text-xs text-slate-500">檢視人員:</span>
+                                            <select 
+                                                className="text-sm font-bold text-slate-700 outline-none bg-transparent cursor-pointer min-w-[120px]"
+                                                value={selectedUserId}
+                                                onChange={(e) => {
+                                                    setSelectedUserId(e.target.value);
+                                                    setFilterType('all'); 
+                                                }}
+                                            >
+                                                <option value="me">{currentUser ? `${currentUser.firstname}` : '本人'}</option>
+                                                {availableUsers.filter(u => u.id !== currentUser?.id).map(u => (
+                                                    <option key={u.id} value={u.id}>{u.name}</option>
+                                                ))}
+                                            </select>
+                                        </div>
                                     </div>
-                                </div>
+                                )}
 
                                 {/* Stats */}
                                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
