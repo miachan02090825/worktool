@@ -51,7 +51,7 @@
         // Helper: Check if status is closed
         const isClosed = (statusName) => {
             if (!statusName) return false;
-            const s = statusName.toLowerCase();
+            const s = statusName.trim().toLowerCase(); // Trim to avoid space issues
             // Expanded list of closed status keywords
             return s === 'closed' || s === 'resolved' || s === 'rejected' || s === 'done' ||
                    s.includes('已解決') || s.includes('結案') || s.includes('關閉') || s.includes('完成') || s.includes('已結束');
@@ -155,6 +155,10 @@
 
                 const fetchWithRetry = async (apiPath) => {
                     let targetUrl = `${cleanUrl}${apiPath}`;
+                    
+                    // Add Cache Buster to prevent stale data
+                    const timeChar = targetUrl.includes('?') ? '&' : '?';
+                    targetUrl = `${targetUrl}${timeChar}_t=${new Date().getTime()}`;
                     
                     if (proxyMode !== 'direct') {
                         const separator = targetUrl.includes('?') ? '&' : '?';
