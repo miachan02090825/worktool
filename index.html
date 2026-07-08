@@ -109,6 +109,7 @@
                 projectId: safeGet('redmine_projectId', '')
             });
             const [proxyMode, setProxyMode] = useState(safeGet('redmine_proxyMode', 'public'));
+            const [customProxyUrl, setCustomProxyUrl] = useState(safeGet('redmine_customProxyUrl', ''));
             // New: Scope state (me vs all)
             const [fetchScope, setFetchScope] = useState(safeGet('redmine_fetchScope', 'me'));
             
@@ -133,24 +134,28 @@
                 localStorage.setItem('redmine_apiKey', config.apiKey);
                 localStorage.setItem('redmine_projectId', config.projectId);
                 localStorage.setItem('redmine_proxyMode', proxyMode);
+                localStorage.setItem('redmine_customProxyUrl', customProxyUrl);
                 localStorage.setItem('redmine_fetchScope', fetchScope);
-            }, [config, proxyMode, fetchScope]);
+            }, [config, proxyMode, customProxyUrl, fetchScope]);
 
             // --- Fetch Logic (Enhanced) ---
             const fetchData = async () => {
                 if (!config.apiKey) { setError({ title: '缺少資料', msg: '請先輸入 API Token' }); return; }
-                setLoading(true); 
+                if (proxyMode === 'custom' && !customProxyUrl.trim()) { setError({ title: '缺少資料', msg: '請先在設定中輸入自訂 Proxy 網址' }); return; }
+                setLoading(true);
                 setError(null);
                 setStatusMsg('準備連線...');
 
                 const cleanUrl = config.url.replace(/\/$/, '');
 
-                const proxyProviders = proxyMode === 'direct' 
-                    ? [{ name: 'Direct', fn: (url) => url }] 
+                const proxyProviders = proxyMode === 'direct'
+                    ? [{ name: 'Direct', fn: (url) => url }]
+                    : proxyMode === 'custom'
+                    ? [{ name: '自訂 Proxy', fn: (url) => `${customProxyUrl.trim()}${encodeURIComponent(url)}` }]
                     : [
+                        { name: 'CodeTabs', fn: (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}` },
                         { name: 'AllOrigins', fn: (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}` },
-                        { name: 'CorsProxy.io', fn: (url) => `https://corsproxy.io/?${encodeURIComponent(url)}` },
-                        { name: 'CodeTabs', fn: (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}` }
+                        { name: 'CorsProxy.io', fn: (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}` }
                     ];
 
                 const fetchWithRetry = async (apiPath) => {
@@ -188,7 +193,17 @@
                     throw lastErr || new Error('ALL_PROXIES_FAILED');
                 };
 
+                // 自動重試：暫時性失敗最多嘗試 3 次，每次間隔 5 秒
+                const MAX_ATTEMPTS = 3;
+                let finalErr = null;
+
+                for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
                 try {
+                    if (attempt > 1) {
+                        setStatusMsg(`連線不穩，正在重試 (${attempt - 1}/${MAX_ATTEMPTS - 1})...`);
+                        await new Promise(r => setTimeout(r, 5000));
+                    }
+
                     // 1. Fetch User
                     const userData = await fetchWithRetry('/users/current.json');
                     
@@ -225,18 +240,27 @@
                     }
 
                     setStatusMsg('');
-                } catch (err) {
-                    console.error("Fetch Error:", err);
-                    let errorMsg = { title: '連線失敗', msg: err.message, hint: '' };
-
-                    if (err.message === 'AUTH_401') errorMsg = { title: '權限錯誤 (401)', msg: 'API Token 無效。', hint: '請檢查 Token 是否正確。' };
-                    else if (err.message === 'URL_404') errorMsg = { title: '網址錯誤 (404)', msg: '找不到 Redmine 主機。', hint: '請檢查網址輸入是否有誤。' };
-                    else if (err.message === 'ALL_PROXIES_FAILED' || err.message.includes('Failed to fetch')) errorMsg = { title: '無法建立連線', msg: '所有代理伺服器皆無法存取您的 Redmine。', hint: '若您在公司內網，請切換為「直連模式」並安裝 Allow CORS 套件。' };
-
-                    setError(errorMsg);
-                } finally {
                     setLoading(false);
+                    return;
+                } catch (err) {
+                    console.warn(`Fetch attempt ${attempt} failed:`, err);
+                    finalErr = err;
+                    // 致命錯誤（Token 錯誤、網址錯誤）不需要重試
+                    if (err.message === 'AUTH_401' || err.message === 'URL_404') break;
                 }
+                }
+
+                console.error("Fetch Error:", finalErr);
+                let errorMsg = { title: '連線失敗', msg: finalErr.message, hint: '' };
+
+                if (finalErr.message === 'AUTH_401') errorMsg = { title: '權限錯誤 (401)', msg: 'API Token 無效。', hint: '請檢查 Token 是否正確。' };
+                else if (finalErr.message === 'URL_404') errorMsg = { title: '網址錯誤 (404)', msg: '找不到 Redmine 主機。', hint: '請檢查網址輸入是否有誤。' };
+                else if (proxyMode === 'custom') errorMsg = { title: '自訂 Proxy 連線失敗', msg: '無法透過您設定的 Proxy 存取 Redmine。', hint: '請確認 Proxy 網址是否正確（結尾通常是 ?url= 或 ?quest=），以及該服務是否正常運作。' };
+                else if (proxyMode === 'direct') errorMsg = { title: '直連失敗 (CORS 阻擋)', msg: '瀏覽器基於安全政策擋下了跨網域請求。', hint: '直連模式需要安裝並啟用「Allow CORS」瀏覽器套件，或改用「自訂 Proxy」模式。' };
+                else if (finalErr.message === 'ALL_PROXIES_FAILED' || finalErr.message.includes('Failed to fetch') || finalErr.message.startsWith('HTTP_')) errorMsg = { title: '無法建立連線', msg: '所有公共代理伺服器皆無法使用（免費服務不穩定）。', hint: '建議在設定中改用「自訂 Proxy」模式（可自架 Cloudflare Worker），或切換「直連模式」並安裝 Allow CORS 套件。' };
+
+                setError(errorMsg);
+                setLoading(false);
             };
 
             // --- Filtering Logic ---
@@ -365,10 +389,10 @@
 
                             {/* Collapsible Settings */}
                             {showSettings && (
-                                <div className="mt-3 pt-3 border-t border-slate-100 flex gap-4 animate-fadeIn">
-                                    <div className="flex-1">
+                                <div className="mt-3 pt-3 border-t border-slate-100 flex flex-wrap gap-4 animate-fadeIn">
+                                    <div className="flex-1 min-w-[200px]">
                                         <label className="text-xs text-slate-500 block mb-1">Redmine 網址</label>
-                                        <input 
+                                        <input
                                             className="w-full bg-slate-50 border border-slate-200 rounded px-2 py-1 text-sm text-slate-600"
                                             value={config.url}
                                             onChange={e => setConfig({...config, url: e.target.value})}
@@ -376,15 +400,27 @@
                                     </div>
                                     <div className="w-48">
                                         <label className="text-xs text-slate-500 block mb-1">連線模式</label>
-                                        <select 
+                                        <select
                                             className="w-full bg-slate-50 border border-slate-200 rounded px-2 py-1 text-sm text-slate-600"
                                             value={proxyMode}
                                             onChange={e => setProxyMode(e.target.value)}
                                         >
-                                            <option value="public">公共 Proxy (推薦)</option>
+                                            <option value="public">公共 Proxy (不穩定)</option>
+                                            <option value="custom">自訂 Proxy (推薦)</option>
                                             <option value="direct">直連 (需 CORS 套件)</option>
                                         </select>
                                     </div>
+                                    {proxyMode === 'custom' && (
+                                        <div className="flex-1 min-w-[280px]">
+                                            <label className="text-xs text-slate-500 block mb-1">自訂 Proxy 網址（結尾須為 ?url= 之類的參數）</label>
+                                            <input
+                                                className="w-full bg-slate-50 border border-slate-200 rounded px-2 py-1 text-sm text-slate-600"
+                                                placeholder="https://your-worker.workers.dev/?url="
+                                                value={customProxyUrl}
+                                                onChange={e => setCustomProxyUrl(e.target.value)}
+                                            />
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>
